@@ -1,0 +1,146 @@
+---
+title: "Data Exploration Writeup"
+format: html
+editor: visual
+output: html
+---
+
+## The Impact of College Scorecard Release on Student Search Behavior
+
+*A Difference-in-Differences Analysis*
+
+The 2015 College Scorecard aimed to increase transparency about college outcomes by publishing earnings data. This study tests whether its release shifted student interest toward higher-earning institutions, using the weekly Google search trends, from 2013-2016 as a proxy for demand.
+
+**Hypothesis**: Naturally, students value higher earnings information. We should observe increased search interest for high-earning colleges post-Scorecard.
+
+```{r}
+# load packages
+library(rio)
+library(tidyverse)
+library(ggplot2)
+library(fixest)
+library(here)
+
+```
+
+```{r}
+# import data
+
+full_data <- import(here("data", "clean", "Data_Cleaning.rds"), trust = TRUE)
+```
+
+```{r}
+did_model <- feols(
+  index_z ~ treatment_group * post_policy + i(month_num, ref = 1) | schname , data = full_data)
+
+summary(did_model)
+
+# Extract coef & S.E
+
+coef_est <- coef(did_model)["treatment_group:post_policyTRUE"]
+se_est   <- se(did_model)["treatment_group:post_policyTRUE"]
+
+cat("Interaction coefficient =", round(coef_est, 3),
+    "with SE =", round(se_est, 3), "\n")
+```
+
+1.  The difference-in-difference model tells us the additional change (in SD) for high-earning schools after the scorecard release, relative to low-earning schools.
+
+2.  High-earning schools saw search interest drop by about 0.06 SDs more than low-earning schools after the Scorecard launch.
+
+3.  This effect is statistically significant (p ≈ 0.0023), indicating strong evidence of a differential trend following the Scorecard release.
+
+4.  The negative sign suggests the Scorecard may have reduced interest in high-earning schools relative to low-earning ones
+
+**Answering Research Question :**
+
+The introduction of the College Scorecard **decreased** search activity on Google Trends for colleges with high-earning graduates by **0.061 standard deviations**, relative to what it did for colleges with low-earning graduates, with a **standard error of 0.020**. This result comes from the `treatment_group:post_policyTRUE` interaction coefficient in my regression.
+
+```{r}
+# Visualising the DiD model
+
+# Summarize mean and SE of index_z by date and treatment_group
+
+plot_data <- full_data %>%
+  group_by(date, treatment_group) %>%
+  summarize(
+    mean_index = mean(index_z, na.rm = TRUE),
+    se = sd(index_z, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+```
+
+```{r}
+# Plot
+
+ggplot(plot_data, aes(x = date, y = mean_index, color = as.factor(treatment_group), group = treatment_group)) +
+  geom_line(linewidth = 1) +
+  geom_ribbon(aes(ymin = mean_index - 1.96 * se, ymax = mean_index + 1.96 * se, fill = as.factor(treatment_group)), alpha = 0.2, color = NA) +
+  geom_vline(xintercept = as.Date("2015-09-12"), linetype = "dashed", color = "red") +
+  labs(
+    title = "Standardized Search Interest Over Time by Earnings Group",
+    subtitle = "Dashed line = College Scorecard Release",
+    x = "Year",
+    y = "Standardized Search Interest",
+    color = "Treatment Group (High Earnings)",
+    fill = "Treatment Group (High Earnings)"
+  ) +
+  scale_color_manual(values = c("0" = "maroon", "1" = "darkseagreen4"), labels = c("Low Earnings", "High Earnings")) +
+  scale_fill_manual(values = c("0" = "maroon", "1" = "darkseagreen4"), labels = c("Low Earnings", "High Earnings")) +
+  theme_minimal()
+
+```
+
+> The graph shows standardized Google search interest over time, with a clear policy cutoff in September 2015 (red dashed line). Pre-trends are similar between groups, supporting the DiD design. After the Scorecard release, interest in high-earning colleges (green line) declined slightly relative to low-earning colleges (maroon line).
+>
+> This suggests a potential **negative policy effect** on demand for high-earning schools. The scorecard may have shifted attention away from high-earning colleges.
+
+**Possible Real-World explanations:**
+
+1.  Students may have discovered that high-earning colleges were also more expensive or less accessible.
+
+2.  Lower-earning schools may have offered other attractive characteristics that became more salient (e.g., location, diversity, debt levels).
+
+3.  High-earning schools might have already been well-known, with limited room for increased visibility.
+
+**Data Cleaning:**
+
+1.  Defining High-Earning vs. Low-Earning Colleges
+
+    To identify whether a college is “high-earning”, I used the variable `md_earn_wne_p10-REPORTED-EARNINGS` from the College Scorecard, which captures the median earnings of graduates 10 years after entry.
+
+    I classified colleges as high-earning if their median earnings were **above the median** of all predominantly bachelor’s-granting colleges in the dataset. This binary split is simple, transparent, and ensures equal group sizes for comparison in the difference-in-differences model. While alternative approaches (e.g. quartiles) are possible, a median split provided me with a clear interpretation, avoiding overcomplicating the analysis.
+
+2.  Level of Aggregation\
+
+    I maintained the data at the **original level**, which includes one row per week per search keyword per college. This granular level retains as much variation as possible and allowed me to analyze within-college search behavior over time. I did not aggregate by month or college, because weekly variation is central to identifying shifts in Google search trends around the Scorecard release date.
+
+    By standardizing the trend indices within each keyword-college group, I controlled for different scales of search volume across keywords.
+
+3.  Model Design & Interpretation\
+
+    I implemented a **difference-in-differences regression** using the `fixest::feols()` function, with the model:
+
+    *index_z \~ treatment_group \* post_policy + i(month_num, ref = 1) \| schname*
+
+    I used fixed effects for `schname` to control for time-invariant college characteristics, and included month-of-year indicators to absorb seasonality in search behavior.
+
+    The coefficient on the interaction term `treatment_group:post_policyTRUE` is interpreted as the **change in standardized search interest for high-earning colleges, relative to low-earning ones, after the Scorecard**. This captures the causal impact of the policy under the parallel trends assumption.
+
+**Summary:**
+
+This analysis tests whether the release of the College Scorecard shifted student attention toward higher-earning colleges, with the idea that if students would care about higher earnings more, making that information publicly available should increase attention to colleges with better outcomes.
+
+To measure this, **difference-in-differences regression** was implemented. Colleges were classified as “high-earning” if their graduates' median earnings (10 years after entry) were above the sample median. The main regression includes college fixed effects and month-of-year controls.
+
+The estimated coefficient on the interaction term `treatment_group:post_policyTRUE` was **–0.061**, with a standard error of **0.020**.
+
+A one-unit increase in the interaction between being a high-earning college and the post-Scorecard period is associated with a **0.061 standard deviation decrease** in standardized Google search interest, relative to low-earning colleges.
+
+This effect is **statistically significant** and suggests that the Scorecard may have **reduced** interest in high-earning colleges relative to low-earning ones.
+
+**Conclusion:**
+
+This finding suggests that rather than boosting interest in high-earning institutions, the Scorecard may have had the opposite effect.While the intention of the policy was to highlight high-return colleges, the observed behavioral response reflects the complexity of student decision-making when faced with new information.
+
+Ultimately, the Scorecard did affect student behavior, but not necessarily in the expected direction. These results highlight the importance of how information is presented, and suggest that transparency alone does not guarantee that students will respond in straightforward or intended ways.
